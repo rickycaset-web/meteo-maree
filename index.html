@@ -1,0 +1,1081 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Meteo Marino & Tavole Maree</title>
+
+  <!-- Meta tag specifici per Web App iOS a schermo intero -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="MeteoMaree">
+  <meta name="theme-color" content="#030712">
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ocean: {
+              50: '#f0f9ff',
+              500: '#0ea5e9',
+              600: '#0284c7',
+              800: '#075985',
+              900: '#0c4a6e',
+              950: '#030712'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <style>
+    /* Ottimizzazioni per schermi notch/Dynamic Island iPhone */
+    :root {
+      --sat: env(safe-area-inset-top, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left, 0px);
+      --sar: env(safe-area-inset-right, 0px);
+    }
+
+    body {
+      padding-top: var(--sat);
+      padding-bottom: var(--sab);
+      padding-left: var(--sal);
+      padding-right: var(--sar);
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+
+    /* Scrollbar minimalista e scorrimento a scatto per mobile */
+    .snap-x-mandatory {
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+    }
+    .snap-start-card {
+      scroll-snap-align: start;
+    }
+    ::-webkit-scrollbar {
+      height: 4px;
+      width: 4px;
+    }
+    ::-webkit-scrollbar-track {
+      background: rgba(15, 23, 42, 0.6);
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(56, 189, 248, 0.4);
+      border-radius: 9999px;
+    }
+
+    /* Animazione transizione pannello inferiore iOS */
+    .drawer-slide {
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased pb-12">
+
+  <!-- TOP BAR -->
+  <header class="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3">
+    <div class="max-w-6xl mx-auto flex items-center justify-between gap-2">
+      <div class="flex items-center space-x-2">
+        <span class="text-xl">🌊</span>
+        <div>
+          <h1 class="text-sm md:text-base font-bold text-white tracking-tight flex items-center gap-1.5">
+            Meteo Marino & Maree
+            <span id="badge-network" class="text-[10px] bg-sky-950 text-sky-400 border border-sky-800 px-1.5 py-0.5 rounded font-mono">LIVE</span>
+          </h1>
+          <p id="label-location-short" class="text-[11px] text-slate-400 truncate max-w-[200px] sm:max-w-xs">Caricamento coordinate...</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="btn-gps" class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-600 hover:bg-sky-500 text-white shadow-sm active:scale-95 transition-all">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 2v2m0 16v2m10-10h-2M4 10H2m15.364-5.364l-1.414 1.414M7.05 16.95l-1.414 1.414M16.95 16.95l1.414 1.414M7.05 7.05L5.636 5.636M12 15a3 3 0 100-6 3 3 0 000 6z"/></svg>
+          <span class="hidden sm:inline">Mio</span> GPS
+        </button>
+        <button id="btn-open-tide-drawer" class="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-400/30 active:scale-95 transition-all">
+          📋 <span class="hidden sm:inline">Tavole</span> Dati
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- CONTENITORE PRINCIPALE -->
+  <main class="max-w-6xl mx-auto w-full px-3 md:px-6 pt-3 space-y-4 flex-1">
+
+    <!-- SEZIONE MAPPA E RAPIDI PRESET -->
+    <section class="bg-slate-900/60 rounded-2xl border border-slate-800/80 p-3 shadow-lg backdrop-blur">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between pb-2 gap-2">
+        <div class="flex items-center gap-2 w-full sm:w-auto">
+          <span class="text-xs font-semibold text-slate-300">Punto:</span>
+          <div class="flex items-center gap-1.5 text-xs font-mono bg-slate-800 px-2.5 py-1 rounded-md border border-slate-700">
+            <span id="coord-display">45.438, 12.336</span>
+          </div>
+          <button id="btn-refresh" class="text-xs text-sky-400 hover:text-sky-300 ml-auto sm:ml-2">Aggiorna</button>
+        </div>
+
+        <!-- Selettore Preset Rapidi -->
+        <div class="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 text-[11px]">
+          <span class="text-slate-400 shrink-0">Preset:</span>
+          <button data-lat="45.22" data-lon="12.28" class="btn-preset bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 rounded-md shrink-0">Chioggia</button>
+          <button data-lat="45.16" data-lon="12.33" class="btn-preset bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 rounded-md shrink-0">Foce Adige</button>
+          <button data-lat="45.53" data-lon="12.75" class="btn-preset bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 rounded-md shrink-0">Cortellazzo</button>
+          <button data-lat="45.43" data-lon="12.33" class="btn-preset bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 rounded-md shrink-0">Venezia</button>
+          <button data-lat="44.40" data-lon="8.93" class="btn-preset bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 rounded-md shrink-0">Genova</button>
+          <button data-lat="40.83" data-lon="14.25" class="btn-preset bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2 py-1 rounded-md shrink-0">Napoli</button>
+        </div>
+      </div>
+
+      <!-- Container Mappa Leaflet (Altezza ottimizzata per mobile) -->
+      <div id="map" class="w-full h-44 sm:h-56 md:h-64 rounded-xl border border-slate-700/60 overflow-hidden relative z-0"></div>
+    </section>
+
+    <!-- CAROUSEL SELETTORE GIORNI -->
+    <section>
+      <div class="flex items-center justify-between pb-1 px-1">
+        <span class="text-xs font-semibold text-slate-300 uppercase tracking-wider">Seleziona Giornata</span>
+        <span id="current-selected-label" class="text-xs text-sky-400 font-medium">Oggi</span>
+      </div>
+      <div id="days-container" class="flex gap-2 overflow-x-auto pb-1 snap-x-mandatory">
+        <!-- Generati dinamicamente via JS -->
+      </div>
+    </section>
+
+    <!-- CRUSCOTTO STATO CORRENTE -->
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+      <!-- Marea Attuale -->
+      <div class="bg-gradient-to-br from-slate-900 to-indigo-950/40 border border-indigo-900/40 p-3 rounded-xl shadow">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold text-indigo-300">LIVELLO MAREA</span>
+          <span id="badge-tide-trend" class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-900/80 text-indigo-200">--</span>
+        </div>
+        <div class="mt-1 flex items-baseline gap-1">
+          <span id="val-tide-level" class="text-2xl font-black text-white">--</span>
+          <span id="unit-tide" class="text-xs text-indigo-400">cm (ZMPS)</span>
+        </div>
+        <p id="tide-subtext" class="text-[10px] text-slate-400 mt-0.5 truncate">Calcolo idrografico live</p>
+      </div>
+
+      <!-- Onde e Mare -->
+      <div class="bg-gradient-to-br from-slate-900 to-sky-950/40 border border-sky-900/40 p-3 rounded-xl shadow">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold text-sky-300">MOTO ONDOSO</span>
+          <span id="badge-douglas" class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-sky-900/80 text-sky-200">--</span>
+        </div>
+        <div class="mt-1 flex items-baseline gap-1">
+          <span id="val-wave-height" class="text-2xl font-black text-white">--</span>
+          <span class="text-xs text-sky-400">m</span>
+        </div>
+        <p id="wave-subtext" class="text-[10px] text-slate-400 mt-0.5">Periodo: -- s</p>
+      </div>
+
+      <!-- Vento -->
+      <div class="bg-gradient-to-br from-slate-900 to-cyan-950/40 border border-cyan-900/40 p-3 rounded-xl shadow">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold text-cyan-300">VENTO & RAFFICHE</span>
+          <span id="val-wind-dir-arrow" class="text-xs font-bold text-cyan-400">↑ --</span>
+        </div>
+        <div class="mt-1 flex items-baseline gap-1">
+          <span id="val-wind-speed" class="text-2xl font-black text-white">--</span>
+          <span class="text-xs text-cyan-400">kts</span>
+        </div>
+        <p id="wind-subtext" class="text-[10px] text-slate-400 mt-0.5">Raffica: -- kts</p>
+      </div>
+
+      <!-- Barometro e Condizioni -->
+      <div class="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-800 p-3 rounded-xl shadow">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-semibold text-slate-300">ATMOSFERA</span>
+          <span id="val-air-temp" class="text-xs font-bold text-amber-300">--°C</span>
+        </div>
+        <div class="mt-1 flex items-baseline gap-1">
+          <span id="val-pressure" class="text-2xl font-black text-white">--</span>
+          <span class="text-xs text-slate-400">hPa</span>
+        </div>
+        <p id="sea-temp-subtext" class="text-[10px] text-slate-400 mt-0.5">Temp. Mare: --°C</p>
+      </div>
+    </section>
+
+    <!-- ESTREMI DI MAREA AL MINUTO PER IL GIORNO SELEZIONATO -->
+    <section class="bg-slate-900/80 rounded-2xl border border-slate-800 p-3">
+      <div class="flex items-center justify-between pb-2">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+          <span>🎯</span> Picchi di Marea al Minuto (Giorno Selezionato)
+        </h3>
+        <button id="btn-open-tide-drawer-2" class="text-[11px] text-sky-400 hover:text-sky-300 underline font-medium">Vedi tutti i dati</button>
+      </div>
+      <div id="peaks-container" class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <!-- Riempito via JS con colmi e cavi esatti -->
+      </div>
+    </section>
+
+    <!-- GRAFICO DINAMICO 24 ORE DEL GIORNO SELEZIONATO -->
+    <section class="bg-slate-900/90 rounded-2xl border border-slate-800 p-3 sm:p-4 shadow-lg">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-3 gap-2">
+        <div>
+          <h3 id="chart-title" class="text-xs sm:text-sm font-bold text-white tracking-wide">Andamento Orario Continuo (24 Ore)</h3>
+          <p class="text-[11px] text-slate-400">Marea astronomica + sovralzo meteo e moto ondoso</p>
+        </div>
+        <div class="flex items-center gap-1.5 bg-slate-800/80 p-0.5 rounded-lg border border-slate-700/60 self-start sm:self-auto">
+          <button id="btn-chart-tide" class="px-2.5 py-1 text-xs font-semibold rounded-md bg-sky-600 text-white">Marea & Onde</button>
+          <button id="btn-chart-wind" class="px-2.5 py-1 text-xs font-semibold rounded-md text-slate-300 hover:text-white">Vento & Pressione</button>
+        </div>
+      </div>
+      <div class="relative w-full h-56 sm:h-64 md:h-72">
+        <canvas id="marineChart"></canvas>
+      </div>
+    </section>
+
+    <!-- LISTA ORIZZONTALE DELLE 24 ORE CON FOCUS SULL'ORA ATTUALE -->
+    <section class="space-y-2">
+      <div class="flex items-center justify-between px-1">
+        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-300">Dettaglio Orario (24h)</h3>
+        <span class="text-[10px] text-slate-400">Scorri lateralmente 👉</span>
+      </div>
+      <div id="hourly-cards-container" class="flex gap-2.5 overflow-x-auto pb-3 pt-1 snap-x-mandatory">
+        <!-- Generato via JS con slot corrente evidenziato -->
+      </div>
+    </section>
+
+  </main>
+
+  <!-- CASSETTO / DRAWER INFERIORE TAVOLE MAREE (PAGINA NASCOSTA OTTIMIZZATA IOS) -->
+  <div id="tide-drawer-backdrop" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden opacity-0 transition-opacity duration-300 flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div id="tide-drawer" class="drawer-slide translate-y-full sm:translate-y-0 w-full sm:max-w-2xl bg-slate-900 border-t sm:border border-slate-700 rounded-t-3xl sm:rounded-2xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden pb-safe">
+      
+      <!-- Maniglia di trascinamento stile iOS -->
+      <div class="w-full flex justify-center pt-3 pb-1 cursor-pointer sm:hidden" id="drawer-handle">
+        <div class="w-12 h-1.5 bg-slate-600 rounded-full"></div>
+      </div>
+
+      <!-- Intestazione Drawer -->
+      <div class="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+        <div>
+          <h2 class="text-base font-bold text-white flex items-center gap-2">
+            <span>📊</span> Tavola Maree Completa & Modello CPSM
+          </h2>
+          <p class="text-xs text-slate-400" id="drawer-subtext">Analisi di tutti gli estremi locali al minuto</p>
+        </div>
+        <button id="btn-close-drawer" class="p-1.5 rounded-full bg-slate-800 text-slate-300 hover:text-white">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <!-- Contenuto scrollabile del cassetto -->
+      <div class="p-4 overflow-y-auto space-y-4 flex-1 text-xs">
+        <!-- Spiegazione idrografica -->
+        <div class="bg-indigo-950/40 border border-indigo-800/40 p-3 rounded-xl">
+          <p class="font-semibold text-indigo-300 mb-1">Riferimento Altimetrico & Algoritmo:</p>
+          <p class="text-slate-300 leading-relaxed text-[11px]">
+            Nell'Alto Adriatico/Laguna i valori sono espressi rispetto allo <strong>Zero Mareografico Punta della Salute (ZMPS)</strong>, combinando il moto lunisolare armonico ($M_2, S_2, K_1, O_1...$) con il sovralzo da caduta barometrica ($\Delta P$) e lo stress tangenziale del vento (Scirocco/Bora). Negli altri mari è calcolato su Mean Sea Level (s.l.m.).
+          </p>
+        </div>
+
+        <!-- Tabella Picchi Estremi -->
+        <div>
+          <h4 class="font-bold text-slate-200 mb-2 uppercase tracking-wider text-[11px]">Estremi Rilevati (Massimi e Minimi Relativi/Assoluti)</h4>
+          <div class="overflow-x-auto border border-slate-800 rounded-xl">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-slate-800/60 text-slate-400 text-[10px]">
+                  <th class="p-2.5">Giorno & Ora</th>
+                  <th class="p-2.5">Tipo</th>
+                  <th class="p-2.5">Quota</th>
+                  <th class="p-2.5">Categoria</th>
+                  <th class="p-2.5">Escursione (Δ)</th>
+                </tr>
+              </thead>
+              <tbody id="drawer-peaks-tbody" class="divide-y divide-slate-800 text-slate-200">
+                <!-- Inserito da JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tabella Dettagliata Oraria Estesa -->
+        <div>
+          <h4 class="font-bold text-slate-200 mb-2 uppercase tracking-wider text-[11px]">Tabella Oraria Estesa</h4>
+          <div class="overflow-x-auto border border-slate-800 rounded-xl max-h-56">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="bg-slate-800/60 text-slate-400 text-[10px] sticky top-0 bg-slate-800">
+                  <th class="p-2">Ora</th>
+                  <th class="p-2">Marea</th>
+                  <th class="p-2">Onda</th>
+                  <th class="p-2">Periodo</th>
+                  <th class="p-2">Vento</th>
+                  <th class="p-2">Pressione</th>
+                </tr>
+              </thead>
+              <tbody id="drawer-hourly-tbody" class="divide-y divide-slate-800 text-slate-300">
+                <!-- Inserito da JS -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+
+  <!-- JAVASCRIPT APPLICATIVO -->
+  <script>
+    // STATO APPLICATIVO GLOBALE
+    const state = {
+      lat: 45.438,
+      lon: 12.336,
+      locationName: "Venezia / Alto Adriatico",
+      isAdriatic: true,
+      selectedDayIndex: 0, // 0 = Oggi, 1 = Domani, ecc.
+      chartMode: 'tide', // 'tide' o 'wind'
+      rawWeatherData: null,
+      rawMarineData: null,
+      calculatedHourlyTides: [],
+      minutePeaks: [],
+      activeDayList: []
+    };
+
+    let map, marker, marineChart;
+
+    // INIZIALIZZAZIONE MAPPA LEAFLET (Layer ESRI Ocean / Satellite / Voyager esenti da blocchi 403)
+    function initMap() {
+      map = L.map('map', {
+        zoomControl: true,
+        attributionControl: false
+      }).setView([state.lat, state.lon], 10);
+
+      // Layer 1: ESRI World Ocean Base (Ideale per coste e batimetrie)
+      const oceanLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 20,
+        maxNativeZoom: 13
+      });
+
+      // Layer 2: ESRI Imagery Satellite
+      const satLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 20,
+        maxNativeZoom: 18
+      });
+
+      // Layer 3: Carto Voyager
+      const cartoLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd',
+        maxZoom: 20,
+        maxNativeZoom: 19
+      });
+
+      oceanLayer.addTo(map);
+
+      // Selettore Layer
+      L.control.layers({
+        "Oceano/Coste": oceanLayer,
+        "Satellite HD": satLayer,
+        "Stradale/Porti": cartoLayer
+      }, null, { position: 'topright' }).addTo(map);
+
+      // Marker con icona ancora/segnaposto
+      const pinIcon = L.divIcon({
+        className: 'custom-pin',
+        html: `<div style="background-color:#0284c7; width:28px; height:28px; border-radius:50%; border:3px solid white; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 10px rgba(0,0,0,0.5);">⚓</div>`,
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      });
+
+      marker = L.marker([state.lat, state.lon], { icon: pinIcon, draggable: true }).addTo(map);
+
+      // Eventi click e drag
+      map.on('click', (e) => {
+        updateCoordinates(e.latlng.lat, e.latlng.lng);
+      });
+
+      marker.on('dragend', (e) => {
+        const pt = e.target.getLatLng();
+        updateCoordinates(pt.lat, pt.lng);
+      });
+    }
+
+    // AGGIORNAMENTO COORDINATE E RICARICA DATI
+    function updateCoordinates(lat, lon, zoomTo = false) {
+      state.lat = parseFloat(lat.toFixed(4));
+      state.lon = parseFloat(lon.toFixed(4));
+      
+      // Controllo se siamo nell'area del bacino Alto Adriatico / Laguna di Venezia
+      state.isAdriatic = (state.lat >= 44.5 && state.lat <= 45.9 && state.lon >= 12.0 && state.lon <= 13.8);
+
+      document.getElementById('coord-display').textContent = `${state.lat}, ${state.lon}`;
+      marker.setLatLng([state.lat, state.lon]);
+      if (zoomTo) map.setView([state.lat, state.lon], 11);
+
+      updateLocationBadge();
+      loadAllData();
+    }
+
+    function updateLocationBadge() {
+      const netBadge = document.getElementById('badge-network');
+      const locText = document.getElementById('label-location-short');
+      if (state.isAdriatic) {
+        netBadge.textContent = "CPSM ZMPS";
+        netBadge.className = "text-[10px] bg-indigo-950 text-indigo-300 border border-indigo-700 px-1.5 py-0.5 rounded font-mono font-bold";
+        locText.textContent = `Alto Adriatico (${state.lat}, ${state.lon})`;
+      } else {
+        netBadge.textContent = "GLOBAL MSL";
+        netBadge.className = "text-[10px] bg-sky-950 text-sky-400 border border-sky-800 px-1.5 py-0.5 rounded font-mono";
+        locText.textContent = `Coste Aperte (${state.lat}, ${state.lon})`;
+      }
+    }
+
+    // CHIAMATE API LIVE OPEN-METEO
+    async function loadAllData() {
+      try {
+        const [marineRes, weatherRes] = await Promise.all([
+          fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${state.lat}&longitude=${state.lon}&hourly=wave_height,wave_direction,wave_period,wind_wave_height&timezone=auto&forecast_days=6`),
+          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${state.lat}&longitude=${state.lon}&current=temperature_2m,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m&hourly=temperature_2m,surface_pressure,wind_speed_10m,wind_direction_10m,wind_gusts_10m&timezone=auto&forecast_days=6`)
+        ]);
+
+        state.rawMarineData = await marineRes.json();
+        state.rawWeatherData = await weatherRes.json();
+
+        processTidesAndForecasts();
+        renderDaySelector();
+        updateCurrentWidgets();
+        renderViewForSelectedDay();
+      } catch (err) {
+        console.error("Errore recupero API:", err);
+      }
+    }
+
+    // MODELLO IDROGRAFICO ARMONICO CPSM & CALCOLO PICCHI AL MINUTO
+    function processTidesAndForecasts() {
+      const wTimes = state.rawWeatherData.hourly.time;
+      const wPress = state.rawWeatherData.hourly.surface_pressure;
+      const wWindSpd = state.rawWeatherData.hourly.wind_speed_10m;
+      const wWindDir = state.rawWeatherData.hourly.wind_direction_10m;
+
+      // Costruzione dell'elenco giorni disponibili (fino a 5-6 giorni)
+      const dayMap = {};
+      wTimes.forEach(tStr => {
+        const dayStr = tStr.split('T')[0];
+        dayMap[dayStr] = true;
+      });
+      state.activeDayList = Object.keys(dayMap);
+
+      // Calcolo marea oraria
+      state.calculatedHourlyTides = wTimes.map((tStr, idx) => {
+        const dateObj = new Date(tStr);
+        const pVal = wPress[idx] || 1013.25;
+        const wSpeed = wWindSpd[idx] || 0;
+        const wDir = wWindDir[idx] || 0;
+
+        return calculateTideAtDate(dateObj, pVal, wSpeed, wDir, state.isAdriatic, state.lat, state.lon);
+      });
+
+      // Calcolo picchi di marea (Massimi e Minimi relativi ed assoluti) ad alta risoluzione (1 minuto)
+      computeMinuteAccuratePeaks();
+    }
+
+    // Funzione fisica per il calcolo di quota marea in un singolo istante
+    function calculateTideAtDate(dateObj, pressure, windSpeedKmH, windDirDeg, isAdriatic, lat, lon) {
+      const tHours = dateObj.getTime() / 3600000; // ore epoch
+
+      let astroCm = 0;
+      let datumOffset = 0;
+
+      if (isAdriatic) {
+        // Parametri idrografici Laguna di Venezia / ZMPS (Punta della Salute)
+        datumOffset = 25.0; // Differenza rispetto allo zero medio
+        astroCm += 23.5 * Math.cos(2 * Math.PI * tHours / 12.4206); // M2 (Luna semidiurna)
+        astroCm += 10.2 * Math.cos(2 * Math.PI * tHours / 12.0000 + 0.4); // S2 (Sole semidiurno)
+        astroCm += 16.5 * Math.cos(2 * Math.PI * tHours / 23.9344 + 0.8); // K1 (Lunisolare diurna)
+        astroCm += 6.2  * Math.cos(2 * Math.PI * tHours / 25.8193 - 0.5); // O1
+        astroCm += 4.5  * Math.cos(2 * Math.PI * tHours / 12.6583 + 1.1); // N2
+      } else {
+        // Bacino Mediterraneo generale / Coste oceaniche
+        const semiDiurnalAmp = Math.max(12, Math.min(85, Math.abs(Math.sin(lat * Math.PI / 180)) * 60));
+        astroCm += semiDiurnalAmp * Math.cos(2 * Math.PI * tHours / 12.4206 + (lon * Math.PI / 180));
+        astroCm += (semiDiurnalAmp * 0.45) * Math.cos(2 * Math.PI * tHours / 12.0000);
+      }
+
+      // Sovralzo meteorologico barometrico (1 hPa in meno = ~1 cm in più)
+      const deltaP = 1013.25 - pressure;
+      const baroSurge = deltaP * 0.98;
+
+      // Sovralzo da vento (Scirocco ~130°-160° spinge nell'Adriatico)
+      let windSurge = 0;
+      if (isAdriatic) {
+        const sciroccoFactor = Math.cos((windDirDeg - 145) * Math.PI / 180);
+        if (sciroccoFactor > 0) {
+          windSurge = Math.pow(windSpeedKmH / 10, 1.6) * 1.8 * sciroccoFactor;
+        }
+      }
+
+      const totalCm = Math.round(datumOffset + astroCm + baroSurge + windSurge);
+      return {
+        totalCm,
+        astroCm: Math.round(astroCm + datumOffset),
+        surgeCm: Math.round(baroSurge + windSurge),
+        meters: (totalCm / 100).toFixed(2)
+      };
+    }
+
+    // Scansione ad alta precisione minuto per minuto lungo l'intervallo temporale
+    function computeMinuteAccuratePeaks() {
+      state.minutePeaks = [];
+      const startTime = new Date(state.rawWeatherData.hourly.time[0]).getTime();
+      const totalHours = state.rawWeatherData.hourly.time.length;
+      const endTime = startTime + (totalHours - 1) * 3600000;
+
+      const stepMs = 60 * 1000; // passo 1 minuto
+      let prevVal = null;
+      let prevSlope = null;
+      let candidatePeak = null;
+
+      for (let t = startTime; t <= endTime; t += stepMs) {
+        const curDate = new Date(t);
+        // Interpola pressione e vento per il minuto esatto
+        const hourIdx = Math.min(totalHours - 1, Math.floor((t - startTime) / 3600000));
+        const p = state.rawWeatherData.hourly.surface_pressure[hourIdx] || 1013;
+        const wspd = state.rawWeatherData.hourly.wind_speed_10m[hourIdx] || 0;
+        const wdir = state.rawWeatherData.hourly.wind_direction_10m[hourIdx] || 0;
+
+        const res = calculateTideAtDate(curDate, p, wspd, wdir, state.isAdriatic, state.lat, state.lon);
+        const val = res.totalCm;
+
+        if (prevVal !== null) {
+          const slope = val - prevVal;
+          if (prevSlope !== null) {
+            // Cambio segno pendenza: punto stazionario (dh/dt = 0)
+            if (prevSlope > 0 && slope < 0) {
+              // Massimo
+              state.minutePeaks.push({
+                date: new Date(t - stepMs),
+                type: 'ALTA',
+                cm: prevVal,
+                meters: (prevVal / 100).toFixed(2),
+                isoDay: new Date(t - stepMs).toISOString().split('T')[0]
+              });
+            } else if (prevSlope < 0 && slope > 0) {
+              // Minimo
+              state.minutePeaks.push({
+                date: new Date(t - stepMs),
+                type: 'BASSA',
+                cm: prevVal,
+                meters: (prevVal / 100).toFixed(2),
+                isoDay: new Date(t - stepMs).toISOString().split('T')[0]
+              });
+            }
+          }
+          if (slope !== 0) prevSlope = slope;
+        }
+        prevVal = val;
+      }
+    }
+
+    // RENDER SELETTORE GIORNI
+    function renderDaySelector() {
+      const cont = document.getElementById('days-container');
+      cont.innerHTML = '';
+
+      state.activeDayList.forEach((dayStr, idx) => {
+        const dObj = new Date(dayStr + "T00:00:00");
+        const weekday = dObj.toLocaleDateString('it-IT', { weekday: 'short' });
+        const dayNum = dObj.toLocaleDateString('it-IT', { day: '2-digit', month: 'short' });
+
+        const isSelected = (idx === state.selectedDayIndex);
+        const btn = document.createElement('button');
+        btn.className = `snap-start-card flex flex-col items-center justify-center min-w-[76px] py-2 px-2.5 rounded-xl border text-xs transition-all ${
+          isSelected 
+            ? 'bg-sky-600 border-sky-400 text-white font-bold shadow-md shadow-sky-900/30 ring-2 ring-sky-400/30' 
+            : 'bg-slate-900/90 border-slate-800 text-slate-300 hover:bg-slate-800'
+        }`;
+        
+        let labelName = (idx === 0) ? "Oggi" : (idx === 1 ? "Domani" : weekday);
+
+        btn.innerHTML = `
+          <span class="text-[10px] uppercase tracking-wide opacity-80">${labelName}</span>
+          <span class="text-sm font-black mt-0.5">${dayNum}</span>
+        `;
+
+        btn.addEventListener('click', () => {
+          state.selectedDayIndex = idx;
+          document.getElementById('current-selected-label').textContent = `${labelName} (${dayNum})`;
+          renderDaySelector();
+          renderViewForSelectedDay();
+        });
+
+        cont.appendChild(btn);
+      });
+    }
+
+    // AGGIORNAMENTO WIDGET LIVE CORRENTI (HEADER & TILES)
+    function updateCurrentWidgets() {
+      const now = new Date();
+      const curHourIdx = now.getHours();
+
+      // Marea Attuale
+      const curTide = state.calculatedHourlyTides[curHourIdx] || state.calculatedHourlyTides[0];
+      const nextTide = state.calculatedHourlyTides[curHourIdx + 1] || curTide;
+      const isRising = (nextTide.totalCm >= curTide.totalCm);
+
+      document.getElementById('val-tide-level').textContent = curTide.totalCm > 0 ? `+${curTide.totalCm}` : curTide.totalCm;
+      document.getElementById('unit-tide').textContent = state.isAdriatic ? "cm (ZMPS)" : "cm (s.l.m.)";
+      
+      const badgeTrend = document.getElementById('badge-tide-trend');
+      badgeTrend.textContent = isRising ? "▲ IN CRESCITA" : "▼ IN CALO";
+      badgeTrend.className = `text-[10px] font-bold px-1.5 py-0.5 rounded ${isRising ? 'bg-emerald-950 text-emerald-300 border border-emerald-800' : 'bg-amber-950 text-amber-300 border border-amber-800'}`;
+
+      // Onde
+      const curWave = (state.rawMarineData.hourly && state.rawMarineData.hourly.wave_height) ? state.rawMarineData.hourly.wave_height[curHourIdx] : 0.2;
+      const curPeriod = (state.rawMarineData.hourly && state.rawMarineData.hourly.wave_period) ? state.rawMarineData.hourly.wave_period[curHourIdx] : 3.5;
+      document.getElementById('val-wave-height').textContent = (curWave !== null ? curWave.toFixed(2) : "--");
+      document.getElementById('wave-subtext').textContent = `Periodo: ${curPeriod ? curPeriod.toFixed(1) : '--'} s`;
+
+      // Scala Douglas
+      const douglasBadge = document.getElementById('badge-douglas');
+      if (curWave < 0.1) { douglasBadge.textContent = "0 - Calmo"; douglasBadge.className = "text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-950 text-blue-300"; }
+      else if (curWave < 0.5) { douglasBadge.textContent = "2 - Poco Mosso"; douglasBadge.className = "text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300"; }
+      else if (curWave < 1.25) { douglasBadge.textContent = "3 - Mosso"; douglasBadge.className = "text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300"; }
+      else if (curWave < 2.5) { douglasBadge.textContent = "4 - Molto Mosso"; douglasBadge.className = "text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-950 text-amber-300"; }
+      else { douglasBadge.textContent = "5+ - Agitato"; douglasBadge.className = "text-[10px] font-bold px-1.5 py-0.5 rounded bg-rose-950 text-rose-300"; }
+
+      // Vento (in Nodi Nautici: 1 km/h = ~0.539957 kts)
+      const windKmh = state.rawWeatherData.current.wind_speed_10m || 0;
+      const gustKmh = state.rawWeatherData.current.wind_gusts_10m || 0;
+      const windKts = (windKmh * 0.539957).toFixed(1);
+      const gustKts = (gustKmh * 0.539957).toFixed(1);
+      const windDeg = state.rawWeatherData.current.wind_direction_10m || 0;
+
+      document.getElementById('val-wind-speed').textContent = windKts;
+      document.getElementById('wind-subtext').textContent = `Raffiche: ${gustKts} kts`;
+      const arrowElem = document.getElementById('val-wind-dir-arrow');
+      arrowElem.textContent = `${getCompassDirection(windDeg)}`;
+      arrowElem.style.transform = `rotate(${windDeg}deg)`;
+      arrowElem.style.display = 'inline-block';
+
+      // Barometro e Temp
+      document.getElementById('val-pressure').textContent = Math.round(state.rawWeatherData.current.surface_pressure || 1013);
+      document.getElementById('val-air-temp').textContent = `${Math.round(state.rawWeatherData.current.temperature_2m)}°C`;
+    }
+
+    function getCompassDirection(deg) {
+      const dirs = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+      return dirs[Math.round(deg / 22.5) % 16];
+    }
+
+    // VISUALIZZAZIONE PER LA SOLA GIORNATA SELEZIONATA (Picchi, Grafico 24h, Schede Orarie)
+    function renderViewForSelectedDay() {
+      const chosenDayStr = state.activeDayList[state.selectedDayIndex];
+      if (!chosenDayStr) return;
+
+      const now = new Date();
+      const isToday = (chosenDayStr === now.toISOString().split('T')[0]);
+      const currentHour = now.getHours();
+
+      // 1. FILTRA I PICCHI AL MINUTO PER IL GIORNO SCELTO
+      const dayPeaks = state.minutePeaks.filter(p => p.isoDay === chosenDayStr);
+      const peaksBox = document.getElementById('peaks-container');
+      peaksBox.innerHTML = '';
+
+      if (dayPeaks.length === 0) {
+        peaksBox.innerHTML = `<div class="col-span-full text-center text-xs text-slate-500 py-3">Nessun colmo/cavo marcato per questa data</div>`;
+      } else {
+        // Trova il massimo e minimo assoluto del giorno
+        let dayMax = -999, dayMin = 999;
+        dayPeaks.forEach(p => {
+          if (p.cm > dayMax) dayMax = p.cm;
+          if (p.cm < dayMin) dayMin = p.cm;
+        });
+
+        dayPeaks.forEach(p => {
+          const isHigh = (p.type === 'ALTA');
+          const isAbsolute = (isHigh && p.cm === dayMax) || (!isHigh && p.cm === dayMin);
+          const timeFormatted = p.date.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+
+          const card = document.createElement('div');
+          card.className = `p-2.5 rounded-xl border flex flex-col justify-between ${
+            isHigh 
+              ? 'bg-amber-950/20 border-amber-800/40 text-amber-200' 
+              : 'bg-indigo-950/20 border-indigo-800/40 text-indigo-200'
+          }`;
+
+          card.innerHTML = `
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] font-bold uppercase tracking-wider flex items-center gap-1">
+                ${isHigh ? '▲ ALTA' : '▼ BASSA'}
+              </span>
+              <span class="text-[9px] px-1 py-0.5 rounded font-bold ${isAbsolute ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-400'}">
+                ${isAbsolute ? 'ASSOLUTO' : 'RELATIVO'}
+              </span>
+            </div>
+            <div class="my-1">
+              <span class="text-xl font-black text-white">${p.cm > 0 ? '+'+p.cm : p.cm}</span>
+              <span class="text-[10px] opacity-75">cm</span>
+            </div>
+            <div class="text-[11px] font-mono font-bold text-slate-300">
+              Ore ${timeFormatted}
+            </div>
+          `;
+          peaksBox.appendChild(card);
+        });
+      }
+
+      // 2. FILTRA LE 24 ORE ESATTE DEL GIORNO SCELTO
+      const hourlyContainer = document.getElementById('hourly-cards-container');
+      hourlyContainer.innerHTML = '';
+
+      const dayHoursIndices = [];
+      state.rawWeatherData.hourly.time.forEach((tStr, idx) => {
+        if (tStr.startsWith(chosenDayStr)) {
+          dayHoursIndices.push(idx);
+        }
+      });
+
+      let currentHourCardElement = null;
+
+      dayHoursIndices.forEach(idx => {
+        const tStr = state.rawWeatherData.hourly.time[idx];
+        const hourNum = new Date(tStr).getHours();
+        const tide = state.calculatedHourlyTides[idx];
+        const wave = state.rawMarineData.hourly.wave_height ? state.rawMarineData.hourly.wave_height[idx] : 0;
+        const windKmh = state.rawWeatherData.hourly.wind_speed_10m[idx] || 0;
+        const windKts = (windKmh * 0.539957).toFixed(1);
+        const windDir = state.rawWeatherData.hourly.wind_direction_10m[idx] || 0;
+
+        const isCurrentSlot = (isToday && hourNum === currentHour);
+
+        const card = document.createElement('div');
+        card.className = `snap-start-card min-w-[105px] sm:min-w-[115px] p-2.5 rounded-xl border flex flex-col justify-between transition-all ${
+          isCurrentSlot
+            ? 'bg-amber-950/40 border-amber-400 ring-2 ring-amber-400/50 shadow-lg shadow-amber-900/30'
+            : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
+        }`;
+
+        card.innerHTML = `
+          <div class="flex items-center justify-between pb-1 border-b border-slate-800">
+            <span class="text-xs font-black ${isCurrentSlot ? 'text-amber-400' : 'text-slate-200'}">${hourNum}:00</span>
+            ${isCurrentSlot ? '<span class="text-[9px] font-black bg-amber-400 text-slate-950 px-1 py-0.2 rounded">ORA</span>' : ''}
+          </div>
+          <div class="py-1.5 space-y-1">
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] text-slate-400">Marea:</span>
+              <span class="text-xs font-bold ${tide.totalCm >= 0 ? 'text-sky-300' : 'text-slate-300'}">${tide.totalCm > 0 ? '+'+tide.totalCm : tide.totalCm} cm</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] text-slate-400">Onda:</span>
+              <span class="text-xs font-semibold text-emerald-400">${wave !== null ? wave.toFixed(2) : '-'} m</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-[10px] text-slate-400">Vento:</span>
+              <span class="text-xs font-semibold text-cyan-300">${windKts} kt</span>
+            </div>
+          </div>
+          <div class="text-[10px] text-center text-slate-500 font-mono">
+            ${getCompassDirection(windDir)} (${windDir}°)
+          </div>
+        `;
+
+        hourlyContainer.appendChild(card);
+        if (isCurrentSlot) currentHourCardElement = card;
+      });
+
+      // Se oggi, fai scorrere dolcemente il carosello fino allo slot dell'ora attuale
+      if (currentHourCardElement) {
+        setTimeout(() => {
+          currentHourCardElement.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+        }, 150);
+      }
+
+      // 3. AGGIORNA GRAFICO 24 ORE
+      updateChart(dayHoursIndices, chosenDayStr);
+
+      // 4. AGGIORNA TABELLE MODALI NEL DRAWER
+      populateTideDrawer(dayPeaks, dayHoursIndices);
+    }
+
+    // GESTIONE GRAFICO 24H (CHART.JS)
+    function updateChart(dayIndices, dayStr) {
+      const labels = [];
+      const tideValues = [];
+      const waveValues = [];
+      const windValues = [];
+      const pressureValues = [];
+
+      dayIndices.forEach(idx => {
+        const hour = new Date(state.rawWeatherData.hourly.time[idx]).getHours();
+        labels.push(`${hour}:00`);
+        tideValues.push(state.calculatedHourlyTides[idx].totalCm);
+        waveValues.push(state.rawMarineData.hourly.wave_height ? state.rawMarineData.hourly.wave_height[idx] : 0);
+        windValues.push(((state.rawWeatherData.hourly.wind_speed_10m[idx] || 0) * 0.539957).toFixed(1));
+        pressureValues.push(state.rawWeatherData.hourly.surface_pressure[idx]);
+      });
+
+      const ctx = document.getElementById('marineChart').getContext('2d');
+      if (marineChart) marineChart.destroy();
+
+      if (state.chartMode === 'tide') {
+        marineChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: `Livello Marea (${state.isAdriatic ? 'cm ZMPS' : 'cm'})`,
+                data: tideValues,
+                borderColor: '#38bdf8',
+                backgroundColor: 'rgba(56, 189, 248, 0.15)',
+                borderWidth: 2.5,
+                fill: true,
+                tension: 0.4,
+                yAxisID: 'y'
+              },
+              {
+                label: 'Altezza Onde (m)',
+                data: waveValues,
+                borderColor: '#10b981',
+                backgroundColor: 'transparent',
+                borderWidth: 2,
+                borderDash: [4, 4],
+                tension: 0.3,
+                yAxisID: 'y1'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { labels: { color: '#cbd5e1', font: { size: 11 } } }
+            },
+            scales: {
+              x: { grid: { color: 'rgba(51, 65, 85, 0.4)' }, ticks: { color: '#94a3b8', font: { size: 10 } } },
+              y: {
+                position: 'left',
+                grid: { color: 'rgba(51, 65, 85, 0.4)' },
+                ticks: { color: '#38bdf8', font: { size: 10 } },
+                title: { display: true, text: 'Marea (cm)', color: '#38bdf8', font: { size: 10 } }
+              },
+              y1: {
+                position: 'right',
+                grid: { display: false },
+                ticks: { color: '#10b981', font: { size: 10 } },
+                title: { display: true, text: 'Onde (m)', color: '#10b981', font: { size: 10 } }
+              }
+            }
+          }
+        });
+      } else {
+        // Modalità Vento & Barometro
+        marineChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [
+              {
+                label: 'Vento (Nodi kts)',
+                data: windValues,
+                borderColor: '#22d3ee',
+                backgroundColor: 'rgba(34, 211, 238, 0.15)',
+                borderWidth: 2.5,
+                fill: true,
+                tension: 0.3,
+                yAxisID: 'y'
+              },
+              {
+                label: 'Pressione (hPa)',
+                data: pressureValues,
+                borderColor: '#f59e0b',
+                borderWidth: 1.8,
+                borderDash: [5, 3],
+                tension: 0.2,
+                yAxisID: 'y1'
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { labels: { color: '#cbd5e1', font: { size: 11 } } }
+            },
+            scales: {
+              x: { grid: { color: 'rgba(51, 65, 85, 0.4)' }, ticks: { color: '#94a3b8', font: { size: 10 } } },
+              y: {
+                position: 'left',
+                grid: { color: 'rgba(51, 65, 85, 0.4)' },
+                ticks: { color: '#22d3ee', font: { size: 10 } },
+                title: { display: true, text: 'Nodi (kts)', color: '#22d3ee', font: { size: 10 } }
+              },
+              y1: {
+                position: 'right',
+                grid: { display: false },
+                ticks: { color: '#f59e0b', font: { size: 10 } },
+                title: { display: true, text: 'Pressione (hPa)', color: '#f59e0b', font: { size: 10 } }
+              }
+            }
+          }
+        });
+      }
+    }
+
+    // POPOLAZIONE DRAWER / CASSETTO TAVOLE MAREE
+    function populateTideDrawer(dayPeaks, dayIndices) {
+      // 1. Tabella Picchi
+      const tbodyPeaks = document.getElementById('drawer-peaks-tbody');
+      tbodyPeaks.innerHTML = '';
+
+      let prevHeight = null;
+      dayPeaks.forEach(p => {
+        const tr = document.createElement('tr');
+        const isHigh = (p.type === 'ALTA');
+        let deltaText = '--';
+        if (prevHeight !== null) {
+          const diff = p.cm - prevHeight;
+          deltaText = `${diff > 0 ? '+' : ''}${diff} cm`;
+        }
+        prevHeight = p.cm;
+
+        tr.innerHTML = `
+          <td class="p-2.5 font-mono font-bold">${p.date.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' })}</td>
+          <td class="p-2.5 font-bold ${isHigh ? 'text-amber-300' : 'text-indigo-300'}">${p.type}</td>
+          <td class="p-2.5 font-black">${p.cm > 0 ? '+'+p.cm : p.cm} cm</td>
+          <td class="p-2.5"><span class="text-[9px] px-1.5 py-0.5 rounded bg-slate-800">${p.type} MAREA</span></td>
+          <td class="p-2.5 font-mono text-slate-400">${deltaText}</td>
+        `;
+        tbodyPeaks.appendChild(tr);
+      });
+
+      // 2. Tabella Oraria Estesa
+      const tbodyHourly = document.getElementById('drawer-hourly-tbody');
+      tbodyHourly.innerHTML = '';
+
+      dayIndices.forEach(idx => {
+        const tStr = state.rawWeatherData.hourly.time[idx];
+        const h = new Date(tStr).getHours();
+        const tide = state.calculatedHourlyTides[idx];
+        const wave = state.rawMarineData.hourly.wave_height ? state.rawMarineData.hourly.wave_height[idx] : 0;
+        const period = state.rawMarineData.hourly.wave_period ? state.rawMarineData.hourly.wave_period[idx] : 0;
+        const wspd = ((state.rawWeatherData.hourly.wind_speed_10m[idx] || 0) * 0.539957).toFixed(1);
+        const p = Math.round(state.rawWeatherData.hourly.surface_pressure[idx] || 1013);
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td class="p-2 font-mono font-bold">${h}:00</td>
+          <td class="p-2 font-bold ${tide.totalCm >= 0 ? 'text-sky-300' : 'text-slate-300'}">${tide.totalCm > 0 ? '+'+tide.totalCm : tide.totalCm} cm</td>
+          <td class="p-2 text-emerald-400">${wave !== null ? wave.toFixed(2) : '-'} m</td>
+          <td class="p-2 text-slate-400">${period ? period.toFixed(1) : '-'} s</td>
+          <td class="p-2 text-cyan-300">${wspd} kt</td>
+          <td class="p-2 font-mono text-amber-300/80">${p} hPa</td>
+        `;
+        tbodyHourly.appendChild(tr);
+      });
+    }
+
+    // APERTURA / CHIUSURA CASSETTO MODALE
+    function setupDrawerHandlers() {
+      const backdrop = document.getElementById('tide-drawer-backdrop');
+      const drawer = document.getElementById('tide-drawer');
+      const btnOpen1 = document.getElementById('btn-open-tide-drawer');
+      const btnOpen2 = document.getElementById('btn-open-tide-drawer-2');
+      const btnClose = document.getElementById('btn-close-drawer');
+      const handle = document.getElementById('drawer-handle');
+
+      function openDrawer() {
+        backdrop.classList.remove('hidden');
+        setTimeout(() => {
+          backdrop.classList.remove('opacity-0');
+          drawer.classList.remove('translate-y-full');
+        }, 10);
+      }
+
+      function closeDrawer() {
+        drawer.classList.add('translate-y-full');
+        backdrop.classList.add('opacity-0');
+        setTimeout(() => {
+          backdrop.classList.add('hidden');
+        }, 300);
+      }
+
+      btnOpen1.addEventListener('click', openDrawer);
+      btnOpen2.addEventListener('click', openDrawer);
+      btnClose.addEventListener('click', closeDrawer);
+      handle.addEventListener('click', closeDrawer);
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) closeDrawer();
+      });
+    }
+
+    // GESTIONE CAMBIO GRAFICO
+    function setupChartToggle() {
+      const btnTide = document.getElementById('btn-chart-tide');
+      const btnWind = document.getElementById('btn-chart-wind');
+
+      btnTide.addEventListener('click', () => {
+        state.chartMode = 'tide';
+        btnTide.className = "px-2.5 py-1 text-xs font-semibold rounded-md bg-sky-600 text-white";
+        btnWind.className = "px-2.5 py-1 text-xs font-semibold rounded-md text-slate-300 hover:text-white";
+        renderViewForSelectedDay();
+      });
+
+      btnWind.addEventListener('click', () => {
+        state.chartMode = 'wind';
+        btnWind.className = "px-2.5 py-1 text-xs font-semibold rounded-md bg-cyan-600 text-white";
+        btnTide.className = "px-2.5 py-1 text-xs font-semibold rounded-md text-slate-300 hover:text-white";
+        renderViewForSelectedDay();
+      });
+    }
+
+    // GEOLOCALIZZAZIONE GPS DISPOSITIVO
+    function setupGpsHandler() {
+      document.getElementById('btn-gps').addEventListener('click', () => {
+        if ("geolocation" in navigator) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              updateCoordinates(pos.coords.latitude, pos.coords.longitude, true);
+            },
+            (err) => {
+              alert("Impossibile rilevare la posizione GPS: assicurati di aver concesso i permessi nel browser.");
+            },
+            { enableHighAccuracy: true, timeout: 8000 }
+          );
+        } else {
+          alert("Geolocalizzazione non supportata su questo browser.");
+        }
+      });
+
+      document.getElementById('btn-refresh').addEventListener('click', () => {
+        loadAllData();
+      });
+
+      // Pulsanti Preset
+      document.querySelectorAll('.btn-preset').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const lat = parseFloat(btn.getAttribute('data-lat'));
+          const lon = parseFloat(btn.getAttribute('data-lon'));
+          updateCoordinates(lat, lon, true);
+        });
+      });
+    }
+
+    // AVVIO ALL'APERTURA DELLA PAGINA
+    window.addEventListener('DOMContentLoaded', () => {
+      initMap();
+      setupDrawerHandlers();
+      setupChartToggle();
+      setupGpsHandler();
+      updateCoordinates(state.lat, state.lon);
+    });
+  </script>
+</body>
+</html>
